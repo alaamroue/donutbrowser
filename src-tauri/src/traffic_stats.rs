@@ -580,7 +580,11 @@ impl LiveTrafficTracker {
       .profile_id
       .clone()
       .unwrap_or_else(|| self.proxy_id.clone());
-    let session_file = get_traffic_stats_dir().join(format!("{}.session.json", storage_key));
+    let stats_dir = get_traffic_stats_dir();
+    let session_file = stats_dir.join(format!("{}.session.json", storage_key));
+
+    // Ensure the directory exists (proxy worker process may not have created it yet)
+    fs::create_dir_all(&stats_dir)?;
 
     // Write atomically using a temp file
     let temp_file = session_file.with_extension("tmp");
@@ -764,6 +768,10 @@ impl LiveTrafficTracker {
 
     // Use file locking to prevent concurrent writes from multiple proxy processes
     let lock_path = get_traffic_stats_dir().join(format!("{}.lock", storage_key));
+    // Ensure directory exists before trying to create the lock file
+    if let Some(parent) = lock_path.parent() {
+      let _ = fs::create_dir_all(parent);
+    }
     let _lock = match acquire_file_lock(&lock_path) {
       Ok(lock) => lock,
       Err(e) => {

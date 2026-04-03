@@ -6,9 +6,9 @@ pub fn load_icon() -> Icon {
   // On Windows, use the full-color icon so it renders well on dark taskbars.
   // On macOS/Linux, use the template icon (black with alpha) for system light/dark handling.
   #[cfg(target_os = "windows")]
-  let icon_bytes = include_bytes!("../../icons/tray-icon-win-44.png");
+  let icon_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/tray-icon-win-44.png"));
   #[cfg(not(target_os = "windows"))]
-  let icon_bytes = include_bytes!("../../icons/tray-icon-44.png");
+  let icon_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/tray-icon-44.png"));
 
   let image = image::load_from_memory(icon_bytes)
     .expect("Failed to load icon")

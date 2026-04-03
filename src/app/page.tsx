@@ -45,6 +45,7 @@ import { useUpdateNotifications } from "@/hooks/use-update-notifications";
 import { useVersionUpdater } from "@/hooks/use-version-updater";
 import { useVpnEvents } from "@/hooks/use-vpn-events";
 import { useWayfernTerms } from "@/hooks/use-wayfern-terms";
+import { isTauriRuntime } from "@/lib/tauri";
 import {
   dismissToast,
   showErrorToast,
@@ -66,7 +67,29 @@ interface PendingUrl {
   url: string;
 }
 
-export default function Home() {
+function BrowserPreviewFallback() {
+  return (
+    <div className="grid min-h-screen px-6 place-items-center bg-background">
+      <div className="w-full max-w-xl p-8 border shadow-sm rounded-xl bg-card text-card-foreground">
+        <h1 className="text-2xl font-semibold">
+          Donut Browser Desktop Preview
+        </h1>
+        <p className="mt-3 text-sm text-muted-foreground">
+          This UI depends on the Tauri desktop runtime. In a plain browser tab,
+          desktop commands like profile launch, settings, deep links, and event
+          listeners are not available.
+        </p>
+        <p className="mt-4 text-sm text-muted-foreground">
+          Use{" "}
+          <span className="font-medium text-foreground">pnpm tauri dev</span>
+          to run the actual app.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function HomeDesktop() {
   // Mount global version update listener/toasts
   useVersionUpdater();
 
@@ -590,10 +613,10 @@ export default function Home() {
       });
       console.log("Successfully launched profile:", result.name);
     } catch (err: unknown) {
-      console.error("Failed to launch browser:", err);
       const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error("Failed to launch browser:", err);
       showErrorToast(`Failed to launch browser: ${errorMessage}`);
-      throw err;
+      return;
     }
   }, []);
 
@@ -1355,4 +1378,12 @@ export default function Home() {
       />
     </div>
   );
+}
+
+export default function Home() {
+  if (!isTauriRuntime()) {
+    return <BrowserPreviewFallback />;
+  }
+
+  return <HomeDesktop />;
 }

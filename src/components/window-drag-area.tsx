@@ -2,6 +2,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
+import { isTauriRuntime } from "@/lib/tauri";
 
 type Platform = "macos" | "windows" | "linux";
 
@@ -20,14 +21,14 @@ export function WindowDragArea() {
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (!isTauriRuntime()) return;
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
 
     const startDrag = async () => {
       try {
-        const window = getCurrentWindow();
-        await window.startDragging();
+        await getCurrentWindow().startDragging();
       } catch (error) {
         console.error("Failed to start window dragging:", error);
       }
@@ -35,6 +36,10 @@ export function WindowDragArea() {
 
     void startDrag();
   };
+
+  if (!isTauriRuntime()) {
+    return null;
+  }
 
   // Linux: system decorations handle everything
   if (!platform || platform === "linux") {
@@ -96,7 +101,7 @@ export function WindowDragArea() {
           onClick={() => {
             void handleMinimize();
           }}
-          className="flex items-center justify-center w-12 h-full hover:bg-muted/50 transition-colors text-muted-foreground hover:text-foreground"
+          className="flex items-center justify-center w-12 h-full transition-colors hover:bg-muted/50 text-muted-foreground hover:text-foreground"
         >
           <svg
             width="10"
@@ -114,7 +119,7 @@ export function WindowDragArea() {
           onClick={() => {
             void handleClose();
           }}
-          className="flex items-center justify-center w-12 h-full hover:bg-destructive/90 transition-colors text-muted-foreground hover:text-destructive-foreground"
+          className="flex items-center justify-center w-12 h-full transition-colors hover:bg-destructive/90 text-muted-foreground hover:text-destructive-foreground"
         >
           <svg
             width="10"

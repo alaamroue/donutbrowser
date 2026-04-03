@@ -4,7 +4,7 @@
   "version": "0.18.1",
   "identifier": "com.donutbrowser",
   "build": {
-    "beforeDevCommand": "pnpm copy-proxy-binary && pnpm dev",
+    "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:12341",
     "beforeBuildCommand": "pnpm copy-proxy-binary && (test -d ../dist || pnpm build)",
     "frontendDist": "../dist"

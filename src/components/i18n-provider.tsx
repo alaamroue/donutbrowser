@@ -1,9 +1,9 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import i18n, { getLanguageWithFallback, SUPPORTED_LANGUAGES } from "@/i18n";
+import { isTauriRuntime } from "@/lib/tauri";
 
 interface AppSettings {
   language?: string | null;
@@ -19,7 +19,13 @@ export function I18nProvider({ children }: I18nProviderProps) {
 
   useEffect(() => {
     const initializeLanguage = async () => {
+      if (!isTauriRuntime()) {
+        setIsReady(true);
+        return;
+      }
+
       try {
+        const { invoke } = await import("@tauri-apps/api/core");
         const settings = await invoke<AppSettings>("get_app_settings");
         let language = settings.language;
 

@@ -55,6 +55,7 @@ pub async fn fetch_public_ip(proxy: Option<&str>) -> Result<String, IpError> {
     let proxy = reqwest::Proxy::all(proxy_url)
       .map_err(|e| IpError::Network(format!("Invalid proxy: {}", e)))?;
     client_builder
+      .no_proxy()
       .proxy(proxy)
       .build()
       .map_err(|e| IpError::Network(e.to_string()))?
@@ -64,7 +65,7 @@ pub async fn fetch_public_ip(proxy: Option<&str>) -> Result<String, IpError> {
       .map_err(|e| IpError::Network(e.to_string()))?
   };
 
-  let mut last_error = None;
+  let mut errors: Vec<String> = Vec::new();
 
   for url in &urls {
     match client.get(*url).send().await {
@@ -76,21 +77,23 @@ pub async fn fetch_public_ip(proxy: Option<&str>) -> Result<String, IpError> {
           }
         }
         Err(e) => {
-          last_error = Some(format!("Failed to read response from {}: {}", url, e));
+          errors.push(format!("{}: {}", url, e));
         }
       },
       Ok(response) => {
-        last_error = Some(format!("HTTP {} from {}", response.status(), url));
+        errors.push(format!("{}: HTTP {}", url, response.status()));
       }
       Err(e) => {
-        last_error = Some(format!("Request to {} failed: {}", url, e));
+        errors.push(format!("{}: {:?}", url, e));
       }
     }
   }
 
-  Err(IpError::Network(last_error.unwrap_or_else(|| {
+  Err(IpError::Network(if errors.is_empty() {
     "Failed to fetch public IP from any endpoint".to_string()
-  })))
+  } else {
+    format!("All {} endpoints failed: {}", errors.len(), errors.join("; "))
+  }))
 }
 
 #[cfg(test)]

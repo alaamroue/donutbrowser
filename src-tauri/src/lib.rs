@@ -993,35 +993,45 @@ async fn check_vpn_validity(
 
   let socks_url = format!("socks5://127.0.0.1:{}", vpn_worker.local_port.unwrap_or(0));
 
-  // Fetch public IP through the VPN SOCKS5 proxy
-  let result = match ip_utils::fetch_public_ip(Some(&socks_url)).await {
-    Ok(ip) => {
-      let (city, country, country_code) =
-        crate::proxy_manager::ProxyManager::get_ip_geolocation(&ip)
-          .await
-          .unwrap_or_default();
+  // Retry the IP fetch to handle VPN tunnel warm-up delays
+  let mut result = None;
+  for attempt in 0..3 {
+    if attempt > 0 {
+      log::info!("VPN check retry attempt {} after delay", attempt + 1);
+      tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 
-      crate::proxy_manager::ProxyCheckResult {
-        ip,
-        city,
-        country,
-        country_code,
-        timestamp: now,
-        is_valid: true,
+    match ip_utils::fetch_public_ip(Some(&socks_url)).await {
+      Ok(ip) => {
+        let (city, country, country_code) =
+          crate::proxy_manager::ProxyManager::get_ip_geolocation(&ip)
+            .await
+            .unwrap_or_default();
+
+        result = Some(crate::proxy_manager::ProxyCheckResult {
+          ip,
+          city,
+          country,
+          country_code,
+          timestamp: now,
+          is_valid: true,
+        });
+        break;
+      }
+      Err(e) => {
+        log::warn!("VPN check attempt {} failed to fetch public IP: {e}", attempt + 1);
       }
     }
-    Err(e) => {
-      log::warn!("VPN check failed to fetch public IP: {e}");
-      crate::proxy_manager::ProxyCheckResult {
-        ip: String::new(),
-        city: None,
-        country: None,
-        country_code: None,
-        timestamp: now,
-        is_valid: false,
-      }
-    }
-  };
+  }
+
+  let result = result.unwrap_or(crate::proxy_manager::ProxyCheckResult {
+    ip: String::new(),
+    city: None,
+    country: None,
+    country_code: None,
+    timestamp: now,
+    is_valid: false,
+  });
 
   // Stop the temporary VPN worker
   let _ = vpn_worker_runner::stop_vpn_worker(&vpn_worker.id).await;

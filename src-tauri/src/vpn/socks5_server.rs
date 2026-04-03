@@ -370,6 +370,8 @@ impl WireGuardSocks5Server {
       smol_handle: SocketHandle,
       tcp_stream: TcpStream,
       socks_done: bool,
+      connecting: bool,
+      greeting_done: bool,
       read_buf: Vec<u8>,
       dest_addr: Option<SocketAddr>,
     }
@@ -379,9 +381,10 @@ impl WireGuardSocks5Server {
 
     loop {
       // Accept new SOCKS5 connections (non-blocking via short timeout)
-      if let Ok(Ok((stream, _addr))) =
+      if let Ok(Ok((stream, addr))) =
         tokio::time::timeout(tokio::time::Duration::from_millis(1), listener.accept()).await
       {
+        log::debug!("[vpn-worker] Accepted SOCKS5 connection from {}", addr);
         let tcp_rx = SocketBuffer::new(vec![0u8; SMOLTCP_TCP_RX_BUF]);
         let tcp_tx = SocketBuffer::new(vec![0u8; SMOLTCP_TCP_TX_BUF]);
         let tcp_socket = TcpSocket::new(tcp_rx, tcp_tx);
@@ -391,6 +394,8 @@ impl WireGuardSocks5Server {
           smol_handle: handle,
           tcp_stream: stream,
           socks_done: false,
+          connecting: false,
+          greeting_done: false,
           read_buf: Vec::new(),
           dest_addr: None,
         });
@@ -409,37 +414,83 @@ impl WireGuardSocks5Server {
       // Process each connection
       let mut completed = Vec::new();
       for (idx, conn) in connections.iter_mut().enumerate() {
-        if !conn.socks_done {
+        if conn.connecting {
+          // Wait for smoltcp TCP connection to be established before sending SOCKS5 success
+          let socket = sockets.get_mut::<TcpSocket>(conn.smol_handle);
+          if socket.may_send() {
+            // TCP connection established, send SOCKS5 success reply
+            log::debug!("[vpn-worker] Tunnel connection to {:?} established", conn.dest_addr);
+            let _ = conn.tcp_stream.try_write(&[
+              0x05,
+              0x00,
+              0x00,
+              0x01,
+              127,
+              0,
+              0,
+              1,
+              (actual_port >> 8) as u8,
+              (actual_port & 0xff) as u8,
+            ]);
+            conn.connecting = false;
+            conn.socks_done = true;
+          } else if !socket.is_open() {
+            // Connection failed
+            log::warn!(
+              "[vpn-worker] Tunnel connection to {:?} failed (socket closed)",
+              conn.dest_addr
+            );
+            let _ = conn
+              .tcp_stream
+              .try_write(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+            completed.push(idx);
+          }
+        } else if !conn.socks_done {
           // Handle SOCKS5 handshake
           let mut buf = [0u8; 512];
           match conn.tcp_stream.try_read(&mut buf) {
             Ok(0) => {
+              log::debug!("[vpn-worker] Connection {} try_read returned EOF", idx);
               completed.push(idx);
               continue;
             }
             Ok(n) => {
+              log::debug!("[vpn-worker] Connection {} read {} bytes (buf total: {})", idx, n, conn.read_buf.len() + n);
               conn.read_buf.extend_from_slice(&buf[..n]);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(_) => {
+            Err(ref e) => {
+              log::debug!("[vpn-worker] Connection {} try_read error: {}", idx, e);
               completed.push(idx);
               continue;
             }
           }
 
-          if conn.dest_addr.is_none() && conn.read_buf.len() >= 3 {
+          if !conn.greeting_done && conn.read_buf.len() >= 3 {
             // SOCKS5 greeting: version, nmethods, methods
             if conn.read_buf[0] != 0x05 {
+              log::warn!("[vpn-worker] Connection {} invalid SOCKS5 version: 0x{:02x}", idx, conn.read_buf[0]);
               completed.push(idx);
+              continue;
+            }
+            let nmethods = conn.read_buf[1] as usize;
+            if conn.read_buf.len() < 2 + nmethods {
               continue;
             }
             // Reply: no auth required
-            let _ = conn.tcp_stream.try_write(&[0x05, 0x00]);
-            let nmethods = conn.read_buf[1] as usize;
+            match conn.tcp_stream.try_write(&[0x05, 0x00]) {
+              Ok(n) => log::debug!("[vpn-worker] Connection {} greeting response: wrote {} bytes", idx, n),
+              Err(ref e) => {
+                log::warn!("[vpn-worker] Connection {} greeting response write failed: {}", idx, e);
+                completed.push(idx);
+                continue;
+              }
+            }
             conn.read_buf.drain(..2 + nmethods);
+            conn.greeting_done = true;
           }
 
-          if conn.dest_addr.is_none() && conn.read_buf.len() >= 10 {
+          if conn.greeting_done && conn.dest_addr.is_none() && conn.read_buf.len() >= 10 {
             // SOCKS5 connect request
             if conn.read_buf[0] != 0x05 || conn.read_buf[1] != 0x01 {
               completed.push(idx);
@@ -528,10 +579,12 @@ impl WireGuardSocks5Server {
             };
 
             let local_port = 10000 + (rand::random::<u16>() % 50000);
+            log::debug!("[vpn-worker] Connecting to {} via tunnel", addr);
             if socket
               .connect(iface.context(), (smol_addr, addr.port()), local_port)
               .is_err()
             {
+              log::warn!("[vpn-worker] smoltcp connect to {} failed immediately", addr);
               let _ = conn
                 .tcp_stream
                 .try_write(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
@@ -539,20 +592,8 @@ impl WireGuardSocks5Server {
               continue;
             }
 
-            // Send SOCKS5 success reply
-            let _ = conn.tcp_stream.try_write(&[
-              0x05,
-              0x00,
-              0x00,
-              0x01,
-              127,
-              0,
-              0,
-              1,
-              (actual_port >> 8) as u8,
-              (actual_port & 0xff) as u8,
-            ]);
-            conn.socks_done = true;
+            // Wait for TCP connection to establish before replying
+            conn.connecting = true;
           }
         } else {
           // Data relay between SOCKS5 client and smoltcp socket

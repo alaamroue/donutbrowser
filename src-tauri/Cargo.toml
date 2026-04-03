@@ -13,7 +13,9 @@ default-run = "donutbrowser"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "donutbrowser_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Only rlib is needed for desktop. staticlib (iOS) and cdylib (Android) add ~40-60s
+# of extra MSVC linking per build. Add them back if mobile targets are needed.
+crate-type = ["rlib"]
 doctest = false
 
 [[bin]]
@@ -168,7 +170,7 @@ path = "tests/vpn_integration.rs"
 codegen-units = 256
 incremental = true
 opt-level = 0
-# Split debuginfo on macOS for faster linking (ignored on other platforms)
+debug = 0
 split-debuginfo = "unpacked"
 
 [profile.release]

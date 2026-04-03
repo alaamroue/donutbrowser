@@ -2,3 +2,6 @@
 # Omit jobs setting to use all cores
 
 incremental = true
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

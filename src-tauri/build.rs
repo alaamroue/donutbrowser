@@ -58,21 +58,16 @@ fn main() {
   if external_binaries_exist() {
     tauri_build::build();
 
-    // tauri_build embeds the manifest for bin targets only (cargo:rustc-link-arg-bins).
-    // Test binaries (including `cargo test --lib`) also need the comctl32 v6 manifest
-    // or they crash with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). We embed the
-    // manifest for all targets, then suppress the duplicate for bins with /MANIFEST:NO
-    // (tauri_build's resource-embedded manifest still takes effect for bins).
+    // tauri_build embeds the manifest for bin targets via resource.lib.
+    // Test binaries still need it, so embed only for tests to avoid
+    // a duplicate-resource error with rust-lld.
     #[cfg(target_os = "windows")]
-    {
-      embed_windows_manifest();
-      println!("cargo:rustc-link-arg-bins=/MANIFEST:NO");
-    }
+    embed_windows_manifest(true);
   } else {
     println!("cargo:warning=Skipping tauri_build: external binaries not found. This is expected when building sidecar binaries.");
 
     #[cfg(target_os = "windows")]
-    embed_windows_manifest();
+    embed_windows_manifest(false);
   }
 }
 
@@ -128,11 +123,13 @@ fn ensure_dist_folder_exists() {
     );
   }
 
-  println!("cargo:rerun-if-changed=../dist");
+  // Only watch the stub index.html, not the whole dist directory.
+  // Watching ../dist re-triggers build.rs whenever Next.js touches the folder.
+  println!("cargo:rerun-if-changed=../dist/index.html");
 }
 
 #[cfg(target_os = "windows")]
-fn embed_windows_manifest() {
+fn embed_windows_manifest(tests_only: bool) {
   use std::path::PathBuf;
 
   let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -145,19 +142,27 @@ fn embed_windows_manifest() {
 
   // Use the path directly (avoid canonicalize which adds \\?\ prefix that mt.exe rejects)
   let manifest_str = manifest_path.to_str().unwrap().replace('/', "\\");
-  println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
-  println!("cargo:rustc-link-arg=/MANIFESTINPUT:{manifest_str}");
+
+  // When tauri_build handles bins (via resource.lib), only embed for tests
+  // to avoid duplicate manifest resources that rust-lld rejects.
+  let prefix = if tests_only {
+    "cargo:rustc-link-arg-tests"
+  } else {
+    "cargo:rustc-link-arg"
+  };
+  println!("{prefix}=/MANIFEST:EMBED");
+  println!("{prefix}=/MANIFESTINPUT:{manifest_str}");
   println!("cargo:rerun-if-changed=app.manifest");
 }
 
 fn generate_tray_icons() {
-  use resvg::tiny_skia::{Pixmap, Transform};
-  use resvg::usvg::{Options, Tree};
   use std::fs;
   use std::path::PathBuf;
 
   let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+  let out_dir = std::env::var("OUT_DIR").unwrap();
   let icons_dir = PathBuf::from(&manifest_dir).join("icons");
+  let out_path = PathBuf::from(&out_dir);
   let svg_path = icons_dir.join("tray-icon.svg");
 
   println!("cargo:rerun-if-changed=icons/tray-icon.svg");
@@ -166,6 +171,26 @@ fn generate_tray_icons() {
     println!("cargo:warning=tray-icon.svg not found, skipping tray icon generation");
     return;
   }
+
+  // Skip regeneration if all output PNGs in OUT_DIR are newer than the source SVG
+  let output_files = ["tray-icon-22.png", "tray-icon-44.png", "tray-icon-win-44.png"];
+  let svg_modified = fs::metadata(&svg_path)
+    .and_then(|m| m.modified())
+    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+  let all_up_to_date = output_files.iter().all(|f| {
+    let p = out_path.join(f);
+    p.exists()
+      && fs::metadata(&p)
+        .and_then(|m| m.modified())
+        .map(|t| t >= svg_modified)
+        .unwrap_or(false)
+  });
+  if all_up_to_date {
+    return;
+  }
+
+  use resvg::tiny_skia::{Pixmap, Transform};
+  use resvg::usvg::{Options, Tree};
 
   let svg_data = fs::read(&svg_path).expect("Failed to read tray-icon.svg");
   let tree = Tree::from_data(&svg_data, &Options::default()).expect("Failed to parse SVG");
@@ -196,7 +221,7 @@ fn generate_tray_icons() {
                     // pixel[3] (alpha) stays as-is
     }
 
-    let output_path = icons_dir.join(filename);
+    let output_path = out_path.join(filename);
     pixmap
       .save_png(&output_path)
       .expect("Failed to save tray icon PNG");
@@ -213,7 +238,7 @@ fn generate_tray_icons() {
 
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    let output_path = icons_dir.join("tray-icon-win-44.png");
+    let output_path = out_path.join("tray-icon-win-44.png");
     pixmap
       .save_png(&output_path)
       .expect("Failed to save Windows tray icon PNG");

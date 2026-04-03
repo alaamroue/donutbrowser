@@ -1,5 +1,5 @@
 import { execSync, execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -40,6 +40,17 @@ if (TARGET === HOST_TARGET || TARGET === "unknown") {
 const destDir = join(MANIFEST_DIR, "binaries");
 mkdirSync(destDir, { recursive: true });
 
+function binaryUnchanged(source, dest) {
+  try {
+    if (!existsSync(dest)) return false;
+    const srcStat = statSync(source);
+    const dstStat = statSync(dest);
+    return srcStat.size === dstStat.size && srcStat.mtimeMs <= dstStat.mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 function copyBinary(baseName) {
   const binName = isWindows ? `${baseName}.exe` : baseName;
   const source = join(srcDir, binName);
@@ -49,6 +60,10 @@ function copyBinary(baseName) {
   const dest = join(destDir, destName);
 
   if (existsSync(source)) {
+    if (binaryUnchanged(source, dest)) {
+      console.log(`Skipping ${binName} (unchanged)`);
+      return;
+    }
     copyFileSync(source, dest);
     console.log(`Copied ${binName} to ${dest}`);
   } else {
